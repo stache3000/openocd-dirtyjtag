@@ -65,6 +65,9 @@ struct adapter_driver *adapter_drivers[] = {
 #if BUILD_CMSIS_DAP_USB == 1 || BUILD_CMSIS_DAP_HID == 1 || BUILD_CMSIS_DAP_TCP == 1
 		&cmsis_dap_adapter_driver,
 #endif
+#if BUILD_DIRTYJTAG == 1
+		&dirtyjtag_adapter_driver,
+#endif
 #if BUILD_DMEM == 1
 		&dmem_dap_adapter_driver,
 #endif
