@@ -213,6 +213,9 @@ endif
 if CH347
 DRIVERFILES += %D%/ch347.c
 endif
+if DIRTYJTAG
+DRIVERFILES += %D%/dirtyjtag.c
+endif
 
 DRIVERHEADERS = \
 	%D%/bitbang.h \
