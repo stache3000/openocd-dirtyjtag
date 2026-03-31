@@ -193,7 +193,7 @@ static void dirtyjtag_reset(int trst, int srst)
 	uint8_t command[] = {
 		CMD_SETSIG,
 		SIG_TRST | SIG_SRST,
-		(trst ? SIG_TRST : 0) | (srst ? SIG_SRST : 0)
+		(trst ? 0 : SIG_TRST) | (srst ? 0 : SIG_SRST)
 	};
 
 	LOG_DEBUG("dirtyjtag_reset(%d,%d)", trst, srst);
@@ -210,6 +210,7 @@ static int dirtyjtag_speed(int divisor)
 	};
 
 	dirtyjtag_buffer_append(command, sizeof(command)/sizeof(command[0]));
+	dirtyjtag_buffer_flush();
 
 	return ERROR_OK;
 }
@@ -278,10 +279,8 @@ static void syncbb_state_move(int skip)
 
 	for (i = skip; i < tms_count; i++) {
 		tms = (tms_scan >> i) & 1;
-		dirtyjtag_write(0, tms, 0);
-		dirtyjtag_write(1, tms, 0);
+		dirtyjtag_clk(1, tms, 0);
 	}
-	dirtyjtag_write(0, tms, 0);
 
 	tap_set_state(tap_get_end_state());
 }
@@ -300,10 +299,8 @@ static int syncbb_execute_tms(struct jtag_command *cmd)
 	int tms = 0;
 	for (unsigned i = 0; i < num_bits; i++) {
 		tms = ((bits[i/8] >> (i % 8)) & 1);
-		dirtyjtag_write(0, tms, 0);
-		dirtyjtag_write(1, tms, 0);
+		dirtyjtag_clk(1, tms, 0);
 	}
-	dirtyjtag_write(0, tms, 0);
 
 	return ERROR_OK;
 }
@@ -327,15 +324,12 @@ static void syncbb_path_move(struct pathmove_command *cmd)
 			exit(-1);
 		}
 
-		dirtyjtag_write(0, tms, 0);
-		dirtyjtag_write(1, tms, 0);
+		dirtyjtag_clk(1, tms, 0);
 
 		tap_set_state(cmd->path[state_count]);
 		state_count++;
 		num_states--;
 	}
-
-	dirtyjtag_write(0, tms, 0);
 
 	tap_set_end_state(tap_get_state());
 }
@@ -380,6 +374,10 @@ static void syncbb_scan(bool ir_scan, enum scan_type type, uint8_t *buffer, int 
 		CMD_XFER,
 		0
 	};
+	uint8_t getsig = CMD_GETSIG;
+	char dummy;
+	int dummy_read = 0;
+	
 	int pos_last_byte = (scan_size-1)/8;
 	int pos_last_bit = (scan_size-1)%8;
 	bool last_bit = !!(buffer[pos_last_byte] & (1 << pos_last_bit));
@@ -405,8 +403,11 @@ static void syncbb_scan(bool ir_scan, enum scan_type type, uint8_t *buffer, int 
 		syncbb_end_state(saved_end_state);
 	}
 
-	if (dirtyjtag_buffer_use+32+1 > dirtyjtag_buffer_size) {
+	if (dirtyjtag_buffer_use > 0) {
+		dirtyjtag_buffer_append(&getsig, 1);
 		dirtyjtag_buffer_flush();
+		jtag_libusb_bulk_read(usb_handle, ep_read,
+			&dummy, 1, DIRTYJTAG_USB_TIMEOUT, &dummy_read);
 	}
 
 	while (scan_size > 0) {
@@ -415,25 +416,25 @@ static void syncbb_scan(bool ir_scan, enum scan_type type, uint8_t *buffer, int 
 
 		if (type != SCAN_IN) {
 			memcpy(&xfer_tx[2], &buffer[buffer_pos], sent_bytes);
-			for (i = 2; i < 32; i++) {
+			for (i = 2; i < 2 + (size_t)sent_bytes; i++) {
 				xfer_tx[i] = swap_bits(xfer_tx[i]);
 			}
 		} else {
 			/* Set TDO to 0 */
-			memset(&xfer_tx[2], 0, 30);
+			memset(&xfer_tx[2], 0, sent_bytes);
 		}
 		xfer_tx[1] = sent_bits;
 
-		dirtyjtag_buffer_append(xfer_tx, 32);
+		dirtyjtag_buffer_append(xfer_tx, 2 + sent_bytes);
 		dirtyjtag_buffer_flush();
 
 		read = 0;
 		res = jtag_libusb_bulk_read(usb_handle, ep_read,
-			(char*)xfer_rx, 32, DIRTYJTAG_USB_TIMEOUT, &read);
+			(char*)xfer_rx, sent_bytes, DIRTYJTAG_USB_TIMEOUT, &read);
 		assert(res == ERROR_OK);
-		assert(read == 32);
+		assert(read == sent_bytes);
 		if (type != SCAN_OUT) {
-			for (i = 0; i < 32; i++) {
+			for (i = 0; i < (size_t)sent_bytes; i++) {
 				xfer_rx[i] = swap_bits(xfer_rx[i]);
 			}
 			memcpy(&buffer[buffer_pos], xfer_rx, sent_bytes);
